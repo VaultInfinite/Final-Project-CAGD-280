@@ -9,5 +9,7 @@ using UnityEngine;
 
 public interface IEnterable
 {
+    public string Message { get; }
 
+    public void Enter(PlayerController controller);
 }
