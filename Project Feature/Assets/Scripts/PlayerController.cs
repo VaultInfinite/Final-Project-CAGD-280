@@ -1,11 +1,12 @@
 /*
  * Salmoria, Wyatt
  * 05/02/24
- * 
+ *
  */
+
 using System;
-using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 public class PlayerController : MonoBehaviour
@@ -31,9 +32,8 @@ public class PlayerController : MonoBehaviour
     public float crouchHeight = 1.0f;
     public float stepHeight = 0.25f;
     public float jumpHeight = 1.25f;
-
-    public Vector3 upDirection = Vector3.up;
-
+    public float radius = 0.5f;
+    
     //Mouse related controls in degrees
     public float lookSensitivity = 1.0f;
     private float pitch = 0.0f;
@@ -41,54 +41,71 @@ public class PlayerController : MonoBehaviour
 
     //The specific height of the player at this time
     private float currentHeight = 1.78f;
-
-    //Dictates if the player can jump based on if in air or not
-    private bool canJump = false;
+    
     private bool grounded = true;
     private bool atTerminalVelocity = false;
 
-    private Vector3 velocity = -Vector3.one;
+    private Vector3 velocity = Vector3.zero;
     private Vector3 movementDirection = Vector3.zero;
 
-    private new Rigidbody rigidbody;
-    private BoxCollider boxCollider;
+    private CharacterController controller;
 
     //PlayerActionMap Designation
     private PlayerActionMap actions;
 
-    private float JumpForce {
-        get
-        {
-            return Mathf.Sqrt(2.0f * jumpHeight * gravity);
-        }
-    }
+    private float JumpForce => Mathf.Sqrt(2.0f * jumpHeight * gravity);
+    private Vector3 FeetPosition => Vector3.up * radius;
 
     void Awake()
     {
         actions = new PlayerActionMap();
         actions.Enable();
 
-        rigidbody = GetComponent<Rigidbody>();
-        boxCollider = GetComponent<BoxCollider>();
+        controller = GetComponent<CharacterController>();
     }
 
     void Update()
     {
+        controller.stepOffset = stepHeight;
+        controller.height = currentHeight;
+        controller.slopeLimit = maxGroundAngle;
+        controller.radius = radius;
+        controller.center = Vector3.up * (currentHeight / 2.0f);
+        
         Look();
     }
 
     void FixedUpdate()
     {
-        Vector3 start = transform.position;
-        Vector3 end = transform.position + velocity.normalized;
-        Debug.DrawLine(start, end, Color.red);
-
-        end = transform.position + new Vector3(movementDirection.x, 0.0f, movementDirection.y).normalized;
-        Debug.DrawLine(start, end, Color.green);
-
         Move();
+
+        Debug.Log(velocity);
+        CollisionFlags flag = controller.Move(velocity * Time.fixedDeltaTime);
+        velocity = controller.velocity;
         
-        MoveAndCollide();
+        grounded = false;
+        if (Physics.SphereCast(transform.position + FeetPosition, radius, Vector3.down, out RaycastHit hit, 0.1f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        {
+            float angle = Vector3.Angle(hit.normal, Vector3.up);
+            if (angle < maxGroundAngle + Mathf.Epsilon)
+            {
+                grounded = true;
+            }
+        }
+    }
+
+    private void OnDrawGizmos()
+    {
+        Gizmos.DrawSphere(transform.position + FeetPosition, radius);
+        
+        Vector3 start = transform.position;
+        Vector3 end = transform.position + velocity;
+        Gizmos.color = Color.red;
+        Gizmos.DrawLine(start, end);
+
+        end = transform.position + movementDirection;
+        Gizmos.color = Color.green;
+        Gizmos.DrawLine(start, end);
     }
 
     public void Look()
@@ -105,10 +122,7 @@ public class PlayerController : MonoBehaviour
     public void Move()
     {
         bool wantJump = actions.Actions.Jumping.IsPressed();
-
-        CheckTerminalVelocity();
-        CheckGrounded();
-        Debug.Log(grounded);
+        bool wantCrouch = actions.Actions.Crouch.IsPressed();
         
         if (grounded)
         {
@@ -133,20 +147,21 @@ public class PlayerController : MonoBehaviour
             MoveAir();
         }
 
-        //bool movingForward = Vector2.Dot(dir, Vector2.up) >= 0.455f;
+        if (wantCrouch)
+        {
+            currentHeight = crouchHeight;
+        }
+        else
+        {
+            currentHeight = standingHeight;
+        }
 
-        //if (actions.Actions.Sprint.IsPressed() && movingForward)
-        //{
-        //    velocity = movementDirection * runSpeed;
-        //}
-        //else if(actions.Actions.Crouch.IsPressed())
-        //{
-        //    velocity = movementDirection * crouchSpeed;
-        //}
-        //else
-        //{
-        //    velocity = movementDirection * walkSpeed;
-        //}
+        Vector3 scale = visuals.transform.localScale;
+        scale.y = currentHeight / standingHeight;
+        visuals.transform.localScale = scale;
+        
+        CheckTerminalVelocity();
+        // CheckGrounded();
     }
 
     public void MoveGrounded()
@@ -154,47 +169,33 @@ public class PlayerController : MonoBehaviour
         Vector2 dir = actions.Actions.Movement.ReadValue<Vector2>();
         movementDirection = visuals.transform.rotation * new Vector3(dir.x, 0.0f, dir.y).normalized;
 
-        Vector3 newVelocity = movementDirection;
+        Vector3 newVelocity = velocity;
         newVelocity = ApplyFriction(newVelocity);
-        newVelocity = ApplyAcceration(newVelocity);
+        newVelocity = ApplyAcceleration(newVelocity);
 
         newVelocity.y = velocity.y;
         velocity = newVelocity;
     }
 
-    private void MoveAndCollide()
+    private static Vector3 Slide(Vector3 motion, Vector3 normal)
     {
-        bool hit = rigidbody.SweepTest(velocity.normalized, out var result, velocity.magnitude * Time.fixedDeltaTime, QueryTriggerInteraction.Collide);
-        //Physics.BoxCast(boxCollider.transform.position, boxCollider.size * 0.5f, velocity.normalized, out RaycastHit result, boxCollider.transform.rotation, velocity.magnitude * Time.fixedDeltaTime, 0xF, QueryTriggerInteraction.Collide);
-
-        Vector3 newPosition;
-        if (hit)
-        {
-            newPosition = transform.position + velocity.normalized * result.distance;
-            
-        } else
-        {
-            newPosition = transform.position + velocity * Time.fixedDeltaTime;
-        }
-        rigidbody.MovePosition(newPosition);
+        return motion - normal * Vector3.Dot(motion, normal);
     }
 
     private Vector3 ApplyFriction(Vector3 inVelocity)
     {
         float speed = inVelocity.magnitude;
 
-        if(speed != 0.0f)
-        {
-            float drop = speed * friction * Time.fixedDeltaTime;
-            return inVelocity * Mathf.Max(speed - drop, 0.0f) / speed;
-        }
-        else
+        if (speed == 0.0f)
         {
             return Vector3.zero;
         }
+
+        float drop = speed * friction * Time.fixedDeltaTime;
+        return inVelocity * Mathf.Max(speed - drop, 0.0f) / speed;
     }
 
-    private Vector3 ApplyAcceration(Vector3 inVelocity)
+    private Vector3 ApplyAcceleration(Vector3 inVelocity)
     {
         float currentSpeed = Vector3.Dot(inVelocity, movementDirection);
         float addSpeed = Mathf.Clamp(walkSpeed - currentSpeed, 0.0f, acceleration * Time.fixedDeltaTime);
@@ -204,7 +205,14 @@ public class PlayerController : MonoBehaviour
 
     public void MoveAir()
     {
+        Vector2 dir = actions.Actions.Movement.ReadValue<Vector2>();
+        movementDirection = visuals.transform.rotation * new Vector3(dir.x, 0.0f, dir.y).normalized;
 
+        Vector3 newVelocity = velocity;
+        newVelocity = ApplyAcceleration(newVelocity);
+
+        newVelocity.y = velocity.y;
+        velocity = newVelocity;
     }
 
     public void Jump()
@@ -212,43 +220,46 @@ public class PlayerController : MonoBehaviour
         velocity.y = JumpForce;
     }
 
-    public void Enter()
-    {
-
-    }
-
     public void CheckTerminalVelocity()
     {
-        
+        atTerminalVelocity = false || velocity.y >= terminalVelocity;
     }
 
-    public void CheckGrounded()
-    {
-        float groundDepth = -1.0f;
+    // public void CheckGrounded()
+    // {
+    //     grounded = false;
+    //     
+    //     bool hit = TestMotion(Vector3.down * 0.1f, out RaycastHit result, false);
+    //
+    //     if (hit)
+    //     {
+    //         float groundAngle = Vector3.Angle(upDirection, result.normal);
+    //         if (groundAngle <= maxGroundAngle + Mathf.Epsilon)
+    //         {
+    //             grounded = true;
+    //         }
+    //     }
+    // }
 
-        RaycastHit[] hits = rigidbody.SweepTestAll(velocity.normalized, velocity.magnitude * Time.fixedDeltaTime, QueryTriggerInteraction.Collide);
-        //RaycastHit[] hits = Physics.BoxCastAll(boxCollider.transform.position, boxCollider.size * 0.5f, velocity.normalized, boxCollider.transform.rotation, velocity.magnitude * Time.fixedDeltaTime, 0xF, QueryTriggerInteraction.Collide);
-
-        if (hits.Length <= 0)
-        {
-            grounded = false;
-        }
-
-        foreach (var hit in hits)
-        {
-            Physics.ComputePenetration(boxCollider, transform.position, transform.rotation,
-                hit.collider, hit.collider.transform.position, hit.collider.transform.rotation,
-                out Vector3 direction, out float collisionDepth);
-
-            float groundAngle = Vector3.Angle(upDirection, hit.normal);
-            if (groundAngle <= maxGroundAngle + Mathf.Epsilon)
-            {
-                grounded = true;
-                if (groundDepth > collisionDepth)
-                {
-                    groundDepth = collisionDepth;
-                }
-            }
-        }
-    }
+    // private bool TestMotion(Vector3 motion, out RaycastHit result, bool boxCast = false)
+    // {
+    //     return boxCast switch
+    //     {
+    //         true => Physics.BoxCast(boxCollider.transform.position, boxCollider.size * 0.5f, motion.normalized, out result,
+    //             boxCollider.transform.rotation, motion.magnitude, collisionLayers, QueryTriggerInteraction.Ignore),
+    //         false => rigidBody.SweepTest(motion.normalized, out result, motion.magnitude,
+    //             QueryTriggerInteraction.Ignore)
+    //     };
+    // }
+    //
+    // private RaycastHit[] TestMotionAll(Vector3 motion, bool boxCast = false)
+    // {
+    //     if (boxCast)
+    //     {
+    //         return Physics.BoxCastAll(boxCollider.transform.position, boxCollider.size * 0.5f, motion.normalized,
+    //             boxCollider.transform.rotation, motion.magnitude, collisionLayers, QueryTriggerInteraction.Ignore);
+    //     }
+    //     return rigidBody.SweepTestAll(motion.normalized, motion.magnitude,
+    //         QueryTriggerInteraction.Ignore);
+    // }
 }
