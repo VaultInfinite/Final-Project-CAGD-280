@@ -5,11 +5,10 @@
  */
 using System.Collections;
 using System.Collections.Generic;
+using Unity.VisualScripting;
 using UnityEngine;
 
 public interface IEnterable
 {
-    public string Message { get; }
-
-    public void Enter(PlayerController controller);
+    
 }

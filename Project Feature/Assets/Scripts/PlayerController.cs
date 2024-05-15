@@ -1,6 +1,6 @@
 /*
  * Salmoria, Wyatt
- * 05/02/24
+ * 05/07/24
  *
  */
 
@@ -64,22 +64,22 @@ public class PlayerController : MonoBehaviour
         controller = GetComponent<CharacterController>();
     }
 
-    void Update()
+    protected virtual void Update()
     {
         controller.stepOffset = stepHeight;
         controller.height = currentHeight;
         controller.slopeLimit = maxGroundAngle;
         controller.radius = radius;
         controller.center = Vector3.up * (currentHeight / 2.0f);
-        
+
         Look();
     }
 
     void FixedUpdate()
     {
         Move();
-
-        Debug.Log(velocity);
+       
+        //Debug.Log("Velocity " + velocity);
         CollisionFlags flag = controller.Move(velocity * Time.fixedDeltaTime);
         velocity = controller.velocity;
         
@@ -111,6 +111,9 @@ public class PlayerController : MonoBehaviour
     public void Look()
     {
         Vector2 mouseDelta = actions.Actions.Look.ReadValue<Vector2>();
+
+        //print("Yaw " + yaw);
+        //print("Pitch " + pitch);
 
         yaw = (yaw + mouseDelta.x * lookSensitivity) % 360.0f;
         pitch = Mathf.Clamp(pitch - mouseDelta.y * lookSensitivity, -89.9f, 89.9f);
